@@ -1,31 +1,15 @@
-from rag.data_loader import load_json_documents, chunk_documents, load_pdfs_from_folder
-from rag.vectorstore import build_faiss_vectorstore
-from rag.llm import get_llm
-from rag.rag_chain import build_rag_chain
+# main.py
+from rag.agent import agent_app
 from rag.logger import logger
 
 if __name__ == "__main__":
-    logger.info("Loading and processing documents...")
-
-    qa_docs = load_json_documents("data/qa_data.json")
-    spec_docs = load_json_documents("data/car_specs.json")
-    pdf_docs = load_pdfs_from_folder("data/pdfs")
-
-    all_docs = chunk_documents(qa_docs + spec_docs + pdf_docs)
-    logger.info(f"Total chunks after splitting: {len(all_docs)}")
-
-    vectorstore = build_faiss_vectorstore(all_docs)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-
-    llm = get_llm()
-    rag_chain = build_rag_chain(llm, retriever)
-
-    logger.info("LangChain-powered Automobile Assistant Ready!")
+    logger.info("Starting LangGraph agent...")
 
     while True:
         query = input("\nAsk a question (or type 'exit'): ")
         if query.strip().lower() == "exit":
             logger.info("Session ended by user.")
             break
-        response = rag_chain.invoke(query)
-        print("\nAnswer:\n", response["result"])
+
+        result = agent_app.invoke({"question": query})
+        print("\nAnswer:\n", result["answer"])
