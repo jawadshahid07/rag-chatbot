@@ -6,3 +6,5 @@ transformers
 accelerate
 tqdm
 torch
+pypdf
+langchain-huggingface
