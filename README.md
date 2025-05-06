@@ -50,13 +50,13 @@ pip install -r requirements.txt
 
 3. Create a `.env` file:
 ```env
-OLLAMA_MODEL=llama2
+OLLAMA_MODEL=llama3.2
 ```
 
 4. Install Ollama and pull the model:
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull llama2
+ollama pull llama3.2
 ```
 
 5. Add your data to the `data/` folder as `qa_data.json` and `car_specs.json`
