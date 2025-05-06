@@ -1,6 +1,6 @@
 # rag/embedder.py
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 def create_vectorstore(chunks):

@@ -7,7 +7,7 @@ import subprocess
 load_dotenv()
 
 # Ollama model name, default to llama2 (change as needed)
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama2")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 
 def generate_with_llama(prompt: str) -> str:
@@ -22,10 +22,13 @@ def generate_with_llama(prompt: str) -> str:
     """
     try:
         # Run Ollama CLI: ensure 'ollama' is installed and the model is pulled locally
-        result = subprocess.run([
-            "ollama", "run", OLLAMA_MODEL,
-            "--prompt", prompt
-        ], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["ollama", "run", OLLAMA_MODEL],
+            input=prompt,
+            text=True,
+            capture_output=True,
+            check=True
+        )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         # Handle errors (e.g., model not found, CLI not installed)
