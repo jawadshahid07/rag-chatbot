@@ -1,35 +1,31 @@
+# app.py
 import streamlit as st
-from rag.data_loader import load_json_documents, chunk_documents, load_pdfs_from_folder
-from rag.vectorstore import build_faiss_vectorstore
-from rag.llm import get_llm
-from rag.rag_chain import build_rag_chain
+from rag.agent import agent_app
 from rag.logger import logger
 
-@st.cache_resource
-def setup_rag_chain():
-    logger.info("Initializing LangChain RAG pipeline...")
-    
-    # Load documents
-    qa_docs = load_json_documents("data/qa_data.json")
-    spec_docs = load_json_documents("data/car_specs.json")
-    pdf_docs = load_pdfs_from_folder("data/pdfs")
-    all_docs = chunk_documents(qa_docs + spec_docs + pdf_docs)
-    
-    # Build vectorstore and retriever
-    vectorstore = build_faiss_vectorstore(all_docs)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-    
-    # LLM and RAG chain
-    llm = get_llm()
-    return build_rag_chain(llm, retriever)
+st.set_page_config(page_title="🚗 Automobile Assistant", layout="wide")
+st.title("🚗 Automobile Assistant (RAG + SQL)")
 
-# UI
-st.title("🚗 Automobile Assistant")
-user_input = st.text_input("Ask a question about a car:", "")
+# Initialize chat history in session state
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-if user_input:
-    rag_chain = setup_rag_chain()
+# Display previous messages
+for role, message in st.session_state.chat_history:
+    st.chat_message(role).write(message)
+
+# Input box for new question
+if user_input := st.chat_input("Ask a question about cars, features, or sales..."):
+    st.chat_message("user").write(user_input)
+    st.session_state.chat_history.append(("user", user_input))
+
     with st.spinner("Thinking..."):
-        response = rag_chain.invoke(user_input)
-        st.markdown("### 📋 Answer:")
-        st.write(response["result"])
+        try:
+            result = agent_app.invoke({"question": user_input})
+            response = result.get("answer", "Sorry, I couldn't generate a response.")
+        except Exception as e:
+            logger.error(f"Agent error: {e}")
+            response = "An error occurred while processing your question."
+
+    st.chat_message("assistant").write(response)
+    st.session_state.chat_history.append(("assistant", response))
