@@ -14,9 +14,111 @@ from datetime import datetime, timedelta
 class AgentState(TypedDict):
     question: str
     answer: Union[str, None]
-    route: Literal["rag", "sql"]
+    route: Union[str, None]
     sql_query: Union[str, None]
-    top_model: Union[str, None]  # <-- NEW
+    tool_used: Union[str, None]  # NEW
+
+def finalize_response_node(state: AgentState) -> AgentState:
+    tool = state.get("tool_used") or "unknown"
+    question = state.get("question") or ""
+    raw_output = state.get("answer")
+
+    # Optional formatter: unpacks SQL-like tuple values e.g. [(100,)] → "100"
+    def format_raw_output(output):
+        if isinstance(output, list) and len(output) == 1 and isinstance(output[0], tuple):
+            return ", ".join(str(i) for i in output[0])
+        return str(output)
+
+    formatted_output = format_raw_output(raw_output)
+
+    logger.info(f"Finalization Input — Tool: {tool}, Question: {question}, Output: {formatted_output}")
+
+    prompt = f"""You are a helpful assistant. Given a user's question and the raw output from a tool, rephrase the output into a concise, human-friendly answer.
+
+DO NOT make assumptions or add any new facts. Only rephrase or clarify the tool output.
+
+Examples:
+Tool: sql
+Question: What was the most sold car?
+Output: [('Ford F-150 2019',)]
+Answer: The most sold car is the Ford F-150 2019.
+
+Tool: sql
+Question: How many sales have been made in total?
+Output: [(100,)]
+Answer: A total of 100 sales have been made.
+
+Tool: booking
+Question: I want to book a Tesla for tomorrow
+Output: ✅ Booking confirmed for Tesla Model Y on 2025-05-08 for Anonymous.
+Answer: ✅ Booking confirmed for Tesla Model Y on 2025-05-08 for Anonymous.
+
+Tool: rag
+Question: What safety features does the 2021 Honda Civic have?
+Output: The 2021 Honda Civic includes lane keep assist, adaptive cruise control, and blind spot monitoring.
+Answer: The 2021 Honda Civic includes lane keep assist, adaptive cruise control, and blind spot monitoring.
+
+---
+
+Now complete the following:
+
+Tool: {tool}
+Question: {question}
+Output: {formatted_output}
+Answer:"""
+
+    try:
+        final_answer = get_llm().invoke(prompt).strip()
+    except Exception as e:
+        final_answer = f"❌ Could not finalize response. Tool output was: {formatted_output}"
+        logger.error(f"Finalization LLM error: {e}")
+
+    logger.info(f"Finalized response: {final_answer}")
+
+    return {
+        **state,
+        "answer": final_answer,
+        "route": "end"
+    }
+
+
+def main_agent_node(state: AgentState) -> AgentState:
+    if state.get("tool_used"):
+        logger.info(f"Tool '{state['tool_used']}' used. Ending.")
+        return {**state, "route": "end"}
+
+    question = state["question"]
+
+    tool_descriptions = {
+        "rag": "Use this to answer questions about car specifications, manuals, and features.",
+        "sql": "Use this to answer statistical questions about car sales, booking counts, and trends.",
+        "booking": "Use this to make a booking of a car for a customer."
+    }
+
+    prompt = (
+        "You are an intelligent agent deciding which tool to use to answer a question.\n\n"
+        "Available tools:\n"
+        + "\n".join(f"- {tool}: {desc}" for tool, desc in tool_descriptions.items()) +
+        "\n\nInstruction: Based on the question below, choose the most appropriate tool.\n"
+        "Respond only with:\nAction: <tool_name>\n\n"
+        f"Question: {question}"
+    )
+
+    raw_response = get_llm().invoke(prompt).strip()
+    logger.info(f"Router LLM response: {raw_response}")
+
+    # Extract tool name
+    try:
+        tool = raw_response.split("Action:")[1].strip().lower()
+        if tool not in tool_descriptions:
+            raise ValueError("Invalid tool name")
+    except Exception:
+        tool = "rag"  # fallback
+
+    logger.info(f"Routing to {tool} tool")
+    return {**state, "route": tool}
+
+
 
 def generate_sql_query(state: AgentState) -> AgentState:
     prompt = (
@@ -47,7 +149,12 @@ rag_tool = setup_rag_tool()
 def rag_node(state: AgentState) -> AgentState:
     logger.info("Using RAG tool...")
     answer = rag_tool.invoke(state["question"])
-    return {"question": state["question"], "answer": answer, "route": "rag"}
+    return {
+        "question": state["question"],
+        "answer": answer,
+        "route": "rag",
+        "tool_used": "rag"
+    }
 
 
 # Tool: SQL
@@ -62,11 +169,12 @@ def sql_node(state: AgentState) -> AgentState:
     except Exception as e:
         answer = f"Error: {e}"
     return {
-        "question": state["question"],
-        "answer": answer,
-        "route": "sql",
-        "sql_query": sql
-    }
+            "question": state["question"],
+            "answer": answer,
+            "sql_query": sql,
+            "route": "sql",
+            "tool_used": "sql"
+        }
 
 # Tool: booking
 
@@ -90,57 +198,47 @@ def booking_node(state: AgentState) -> AgentState:
         return {
             "question": state["question"],
             "answer": "❌ Could not parse booking info. Please include model, date, and (optionally) name.",
-            "route": "booking"
+            "route": "booking",
+            "tool_used": "booking"
         }
 
     confirmation = book_car(model, date, customer)
     return {
         "question": state["question"],
         "answer": confirmation,
-        "route": "booking"
+        "route": "booking",
+        "tool_used": "booking"
     }
-
-
-
-# Decision router
-def decide_route(state: AgentState) -> Literal["rag", "sql"]:
-    q = state["question"].lower()
-
-    # Basic rule: if asking about "how many", "sold", "last week", etc., go to SQL
-    if any(kw in q for kw in ["sold", "how many", "last week", "yesterday", "total sales", "most sold"]):
-        logger.info("Routing to SQL tool")
-        return "sql"
-    if any(kw in q for kw in ["book", "booking", "reserve", "schedule"]):
-        logger.info("Routing to Booking tool")
-        return "booking"
-    if "book" in q and "rain" in q:
-        logger.info("Routing to weather_booking")
-        return "weather_booking"
-
-
-    logger.info("Routing to RAG tool")
-    return "rag"
 
 
 # Build the graph
 graph = StateGraph(AgentState)
+graph.add_node("main", main_agent_node)
 graph.add_node("rag", rag_node)
 graph.add_node("generate_sql", generate_sql_query)
 graph.add_node("sql", sql_node)
-graph.add_node("router", lambda x: x)  # Pass-through node to run decision logic
 graph.add_node("booking", booking_node)
+graph.add_node("finalize", finalize_response_node)
 
 
-graph.add_conditional_edges("router", decide_route, {
+graph.set_entry_point("main")
+
+graph.add_conditional_edges("main", lambda state: state["route"], {
     "rag": "rag",
     "sql": "generate_sql",
-    "booking": "booking"
+    "booking": "booking",
+    "end": END
 })
-graph.set_entry_point("router")
+
+
+
 graph.add_edge("generate_sql", "sql")
-graph.add_edge("sql", END)
-graph.add_edge("rag", END)
-graph.add_edge("booking", END)
+
+# All tools return to "main"
+graph.add_edge("rag", "finalize")
+graph.add_edge("sql", "finalize")
+graph.add_edge("booking", "finalize")
+
 
 # Compile it
 agent_app: Runnable = graph.compile()
