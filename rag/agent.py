@@ -7,7 +7,6 @@ from rag.sql_tool import get_sql_toolkit
 from rag.llm import get_llm
 from rag.logger import logger
 from rag.booking_tool import book_car
-from rag.weather_tool import get_weather_forecast
 from datetime import datetime, timedelta
 
 
@@ -40,49 +39,6 @@ def generate_sql_query(state: AgentState) -> AgentState:
         "route": "sql",
         "answer": None
     }
-
-# multi hop
-def sql_top_model_node(state: AgentState) -> AgentState:
-    logger.info("Running SQL to get most booked model...")
-
-    query = """
-    SELECT model
-    FROM bookings
-    WHERE date >= date('now', '-7 days')
-    GROUP BY model
-    ORDER BY COUNT(*) DESC
-    LIMIT 1
-    """
-
-    try:
-        result = sql_query_tool.invoke(query)
-        logger.info(f"Top booked model: {result}")
-        top_model = result[0][0] if isinstance(result, list) else result
-    except Exception as e:
-        return {
-            "question": state["question"],
-            "answer": f"❌ SQL error: {e}",
-            "route": "multi_hop",
-            "top_model": None
-        }
-
-    return {
-        "question": state["question"],
-        "answer": None,
-        "route": "multi_hop",
-        "top_model": top_model
-    }
-
-def rag_followup_node(state: AgentState) -> AgentState:
-    logger.info("Using RAG to fetch specs for top booked model...")
-    query = state["top_model"] or "Unknown model"
-    rag_answer = rag_tool.invoke(query)
-    return {
-        "question": state["question"],
-        "answer": f"Top booked model last week: {query}\n\nDetails:\n{rag_answer}",
-        "route": "multi_hop"
-    }
-
 
 
 # Tool: RAG
@@ -143,10 +99,6 @@ def booking_node(state: AgentState) -> AgentState:
         "answer": confirmation,
         "route": "booking"
     }
-
-# Tool: weather
-
-def weather_booking_node(state: AgentState) -> AgentState:
     logger.info("Using Weather-based booking...")
 
     prompt = (
