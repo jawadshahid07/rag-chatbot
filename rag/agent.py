@@ -6,6 +6,9 @@ from rag.rag_tool import setup_rag_tool
 from rag.sql_tool import get_sql_toolkit
 from rag.llm import get_llm
 from rag.logger import logger
+from rag.booking_tool import book_car
+from rag.weather_tool import get_weather_forecast
+from datetime import datetime, timedelta
 
 
 # Define shared state between steps
@@ -14,6 +17,7 @@ class AgentState(TypedDict):
     answer: Union[str, None]
     route: Literal["rag", "sql"]
     sql_query: Union[str, None]
+    top_model: Union[str, None]  # <-- NEW
 
 def generate_sql_query(state: AgentState) -> AgentState:
     prompt = (
@@ -36,6 +40,49 @@ def generate_sql_query(state: AgentState) -> AgentState:
         "route": "sql",
         "answer": None
     }
+
+# multi hop
+def sql_top_model_node(state: AgentState) -> AgentState:
+    logger.info("Running SQL to get most booked model...")
+
+    query = """
+    SELECT model
+    FROM bookings
+    WHERE date >= date('now', '-7 days')
+    GROUP BY model
+    ORDER BY COUNT(*) DESC
+    LIMIT 1
+    """
+
+    try:
+        result = sql_query_tool.invoke(query)
+        logger.info(f"Top booked model: {result}")
+        top_model = result[0][0] if isinstance(result, list) else result
+    except Exception as e:
+        return {
+            "question": state["question"],
+            "answer": f"❌ SQL error: {e}",
+            "route": "multi_hop",
+            "top_model": None
+        }
+
+    return {
+        "question": state["question"],
+        "answer": None,
+        "route": "multi_hop",
+        "top_model": top_model
+    }
+
+def rag_followup_node(state: AgentState) -> AgentState:
+    logger.info("Using RAG to fetch specs for top booked model...")
+    query = state["top_model"] or "Unknown model"
+    rag_answer = rag_tool.invoke(query)
+    return {
+        "question": state["question"],
+        "answer": f"Top booked model last week: {query}\n\nDetails:\n{rag_answer}",
+        "route": "multi_hop"
+    }
+
 
 
 # Tool: RAG
@@ -65,6 +112,76 @@ def sql_node(state: AgentState) -> AgentState:
         "sql_query": sql
     }
 
+# Tool: booking
+
+def booking_node(state: AgentState) -> AgentState:
+    logger.info("Using Booking tool...")
+
+    extraction_prompt = (
+        "Extract the car model, booking date, and customer name from the question below.\n"
+        "Return in this format: MODEL | YYYY-MM-DD | CUSTOMER NAME\n"
+        "Use today's date if the date is unclear.\n"
+        "Use 'Anonymous' if the name is not provided.\n\n"
+        f"Question: {state['question']}"
+    )
+
+    raw_output = get_llm().invoke(extraction_prompt).strip()
+    logger.info(f"Parsed booking info: {raw_output}")
+
+    try:
+        model, date, customer = [s.strip() for s in raw_output.split("|")]
+    except Exception:
+        return {
+            "question": state["question"],
+            "answer": "❌ Could not parse booking info. Please include model, date, and (optionally) name.",
+            "route": "booking"
+        }
+
+    confirmation = book_car(model, date, customer)
+    return {
+        "question": state["question"],
+        "answer": confirmation,
+        "route": "booking"
+    }
+
+# Tool: weather
+
+def weather_booking_node(state: AgentState) -> AgentState:
+    logger.info("Using Weather-based booking...")
+
+    prompt = (
+        "From the following user query, extract:\n"
+        "MODEL | CITY\n\n"
+        f"Question: {state['question']}"
+    )
+
+    try:
+        raw = get_llm().invoke(prompt).strip()
+        model, city = [x.strip() for x in raw.split("|")]
+    except:
+        return {
+            "question": state["question"],
+            "answer": "❌ Could not parse model and city.",
+            "route": "weather_booking"
+        }
+
+    forecast = get_weather_forecast(city)
+    logger.info(f"Forecast for {city} tomorrow: {forecast}")
+
+    if "rain" in forecast.lower():
+        tomorrow = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        confirmation = book_car(model, tomorrow)
+        answer = f"☔ It will rain tomorrow in {city}. {confirmation}"
+    else:
+        answer = f"☀ No rain forecast in {city}. No booking made."
+
+    return {
+        "question": state["question"],
+        "answer": answer,
+        "route": "weather_booking"
+    }
+
+
 
 # Decision router
 def decide_route(state: AgentState) -> Literal["rag", "sql"]:
@@ -74,6 +191,14 @@ def decide_route(state: AgentState) -> Literal["rag", "sql"]:
     if any(kw in q for kw in ["sold", "how many", "last week", "yesterday", "total sales", "most sold"]):
         logger.info("Routing to SQL tool")
         return "sql"
+    if any(kw in q for kw in ["book", "booking", "reserve", "schedule"]):
+        logger.info("Routing to Booking tool")
+        return "booking"
+    if "book" in q and "rain" in q:
+        logger.info("Routing to weather_booking")
+        return "weather_booking"
+
+
     logger.info("Routing to RAG tool")
     return "rag"
 
@@ -84,15 +209,22 @@ graph.add_node("rag", rag_node)
 graph.add_node("generate_sql", generate_sql_query)
 graph.add_node("sql", sql_node)
 graph.add_node("router", lambda x: x)  # Pass-through node to run decision logic
+graph.add_node("booking", booking_node)
+graph.add_node("weather_booking", weather_booking_node)
+graph.add_edge("weather_booking", END)
+
 
 graph.add_conditional_edges("router", decide_route, {
     "rag": "rag",
-    "sql": "generate_sql"
+    "sql": "generate_sql",
+    "booking": "booking",
+    "weather_booking": "weather_booking"
 })
 graph.set_entry_point("router")
 graph.add_edge("generate_sql", "sql")
 graph.add_edge("sql", END)
 graph.add_edge("rag", END)
+graph.add_edge("booking", END)
 
 # Compile it
 agent_app: Runnable = graph.compile()

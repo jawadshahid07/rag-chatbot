@@ -17,6 +17,15 @@ CREATE TABLE IF NOT EXISTS car_sales (
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model TEXT,
+    date TEXT,
+    customer TEXT
+)
+""")
+
 # Sample car models
 car_models = [
     "Toyota Corolla 2020",
