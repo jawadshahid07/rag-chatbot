@@ -99,39 +99,6 @@ def booking_node(state: AgentState) -> AgentState:
         "answer": confirmation,
         "route": "booking"
     }
-    logger.info("Using Weather-based booking...")
-
-    prompt = (
-        "From the following user query, extract:\n"
-        "MODEL | CITY\n\n"
-        f"Question: {state['question']}"
-    )
-
-    try:
-        raw = get_llm().invoke(prompt).strip()
-        model, city = [x.strip() for x in raw.split("|")]
-    except:
-        return {
-            "question": state["question"],
-            "answer": "❌ Could not parse model and city.",
-            "route": "weather_booking"
-        }
-
-    forecast = get_weather_forecast(city)
-    logger.info(f"Forecast for {city} tomorrow: {forecast}")
-
-    if "rain" in forecast.lower():
-        tomorrow = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-        confirmation = book_car(model, tomorrow)
-        answer = f"☔ It will rain tomorrow in {city}. {confirmation}"
-    else:
-        answer = f"☀ No rain forecast in {city}. No booking made."
-
-    return {
-        "question": state["question"],
-        "answer": answer,
-        "route": "weather_booking"
-    }
 
 
 
@@ -162,15 +129,12 @@ graph.add_node("generate_sql", generate_sql_query)
 graph.add_node("sql", sql_node)
 graph.add_node("router", lambda x: x)  # Pass-through node to run decision logic
 graph.add_node("booking", booking_node)
-graph.add_node("weather_booking", weather_booking_node)
-graph.add_edge("weather_booking", END)
 
 
 graph.add_conditional_edges("router", decide_route, {
     "rag": "rag",
     "sql": "generate_sql",
-    "booking": "booking",
-    "weather_booking": "weather_booking"
+    "booking": "booking"
 })
 graph.set_entry_point("router")
 graph.add_edge("generate_sql", "sql")
