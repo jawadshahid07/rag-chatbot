@@ -2,6 +2,7 @@
 import streamlit as st
 from rag.agent import agent_app
 from rag.logger import logger
+import requests
 
 st.set_page_config(page_title="🚗 Automobile Assistant", layout="wide")
 st.title("🚗 Automobile Assistant (RAG + SQL)")
@@ -21,8 +22,9 @@ if user_input := st.chat_input("Ask a question about cars, features, or sales...
 
     with st.spinner("Thinking..."):
         try:
-            result = agent_app.invoke({"question": user_input})
-            response = result.get("answer", "Sorry, I couldn't generate a response.")
+            response = requests.post("http://localhost:5678/webhook/automobile-agent", json={"question": user_input})
+            response_data = response.json()
+            response = response_data.get("answer", "Sorry, no answer.")
         except Exception as e:
             logger.error(f"Agent error: {e}")
             response = "An error occurred while processing your question."
