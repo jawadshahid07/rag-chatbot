@@ -1,4 +1,4 @@
-from langchain_ollama import OllamaLLM
+from langchain_ollama import ChatOllama
 
 def get_llm():
-    return OllamaLLM(model="llama3.2")  # You can parametrize model via .env too
+    return ChatOllama(model="llama3.2")
